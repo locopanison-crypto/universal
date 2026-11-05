@@ -1,3 +1,8 @@
+-- LOCOPANI UNIVERSAL
+-- Sistema de detecção e carregamento automático
+
+local BASE_URL = "https://raw.githubusercontent.com/locopanison-crypto/universal/refs/heads/main/"
+
 local VBL_PLACES = {
     [73956553001240] = true,
     [74691681039273] = true,
@@ -6,37 +11,35 @@ local VBL_PLACES = {
 local RIVALS_PLACE = 17625359962
 local placeId = game.PlaceId
 
+local function carregarModulo(nome, arquivo)
+    print("[LOCOPANI UNIVERSAL] Iniciando " .. nome .. "...")
+
+    local url = BASE_URL .. arquivo
+
+    local ok, err = pcall(function()
+        local source = game:HttpGet(url)
+        local executar = assert(loadstring(source))
+        executar()
+    end)
+
+    if ok then
+        print("[LOCOPANI UNIVERSAL] " .. nome .. " carregado!")
+    else
+        warn("[LOCOPANI UNIVERSAL] Erro em " .. nome .. ": " .. tostring(err))
+    end
+end
+
 if VBL_PLACES[placeId] then
 
     print("[LOCOPANI UNIVERSAL] Volleyball Legends detectado!")
-
-    local VBL_URL = "https://raw.githubusercontent.com/locopanison-crypto/universal/refs/heads/main/LOCOPANI_VBL.lua"
-
-local ok, err = pcall(function()
-    local source = game:HttpGet(VBL_URL)
-    local scriptFunction = assert(loadstring(source))
-    scriptFunction()
-end)
-
-if not ok then
-    warn("[LOCOPANI UNIVERSAL] Erro ao iniciar RIVALS: " .. tostring(err))
-end
+    carregarModulo("Volleyball Legends", "LOCOPANI_VBL.lua")
 
 elseif placeId == RIVALS_PLACE then
 
     print("[LOCOPANI UNIVERSAL] RIVALS detectado!")
+    carregarModulo("RIVALS", "RIVALS.lua")
 
-   local RIVALS_URL = "https://raw.githubusercontent.com/locopanison-crypto/universal/refs/heads/main/RIVALS.lua"
-
-local ok, err = pcall(function()
-    local source = game:HttpGet(VBL_URL)
-    local scriptFunction = assert(loadstring(source))
-    scriptFunction()
-end)
-
-if not ok then
-    warn("[LOCOPANI UNIVERSAL] Erro ao iniciar VBL: " .. tostring(err))
-end
+else
 
     warn("[LOCOPANI UNIVERSAL] Jogo não suportado: " .. tostring(placeId))
 

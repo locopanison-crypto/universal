@@ -4,29 +4,34 @@ local VBL_PLACES = {
 }
 
 local RIVALS_PLACE = 17625359962
-
 local placeId = game.PlaceId
 
 if VBL_PLACES[placeId] then
 
-    print("[LOCOPANI UNIVERSAL] Volleyball Legends detectado")
+    print("[LOCOPANI UNIVERSAL] Volleyball Legends detectado!")
 
-    local VBL_URL = "https://raw.githubusercontent.com/locopanison-crypto/universal/refs/heads/main/LOCOPANI_VBL.lua"
-
-local source = game:HttpGet(VBL_URL)
-local script = loadstring(source)
-
-if script then
-    script()
-else
-    warn("[LOCOPANI UNIVERSAL] Não foi possível carregar o LOCOPANI VBL")
-end
+    -- Mantenha aqui o carregamento VBL que já funciona
 
 elseif placeId == RIVALS_PLACE then
 
-    print("[LOCOPANI UNIVERSAL] RIVALS detectado")
+    print("[LOCOPANI UNIVERSAL] RIVALS detectado!")
 
-    -- carregar RIVALS.lua
+    local function StartRivalsModule()
+
+        local RIVALS_URL = "https://raw.githubusercontent.com/locopanison-crypto/universal/refs/heads/main/RIVALS.lua"
+
+        print("[LOCOPANI] Endereço do módulo: " .. RIVALS_URL)
+
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title = "LOCOPANI UNIVERSAL",
+                Text = "RIVALS detectado!",
+                Duration = 5
+            })
+        end)
+    end
+
+    StartRivalsModule()
 
 else
 

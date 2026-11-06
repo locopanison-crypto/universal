@@ -1,4 +1,3 @@
-print("[LOCOPANI UNIVERSAL] RIVALS.lua carregado com sucesso!")
 if _G["\76\72"] then
     pcall(function() _G["\76\72"]:Unload() end)
     _G["\76\72"] = nil
@@ -31,6 +30,736 @@ do
         if not ok then getgenv().__LH_SetmtBP = nil end
     end
 end
+-- LOCOPANI: tela de carregamento (visual)
+-- ============================================================
+-- LOCOPANI Loading Screen (V24)
+-- Logo "L" circular com glow roxo, bolinhas pulsando ao redor (uma por uma),
+-- particulas roxas tipo neve, barra retangular de progresso (0-100%)
+-- e fundo preto borrado. Dura 6 segundos (ou ate o script terminar).
+-- ============================================================
+do
+	local env = (type(getgenv) == "function" and getgenv()) or _G
+	if env.LOCOPANI_LOADER and type(env.LOCOPANI_LOADER.Destroy) == "function" then
+		pcall(env.LOCOPANI_LOADER.Destroy)
+	end
+	local LOADER = {}
+	env.LOCOPANI_LOADER = LOADER
+
+	local RunService = game:GetService("RunService")
+
+	-- Ajustes rapidos
+	local MIN_TIME = 6 -- duracao da tela / tempo da barra 0-100% (segundos)
+	local HOLD_100 = 0.4 -- tempo mostrando 100% antes de revelar o painel
+	local MAX_TIME = 40 -- seguranca: fecha sozinha se algo travar
+	local BLUR_SIZE = 26 -- forca do blur no fundo
+	local BG_ALPHA = 0.8 -- opacidade do preto (0 a 1)
+	local CY = -40 -- deslocamento vertical do logo (px)
+	local DEBUG = false -- true = avisa no console quando esconde o painel
+	local FLAKES = 40 -- quantidade de particulas de neve
+	local PULSE_PERIOD = 1 -- cada bolinha pulsa a cada X segundos (uma depois da outra)
+	local LOGO = 124 -- diametro do logo (px)
+	local BAR_W = 360 -- largura da barra (px)
+
+	local PURPLE = Color3.fromRGB(150, 70, 255)
+	local VIOLET = Color3.fromRGB(176, 100, 255)
+	local LAVENDER = Color3.fromRGB(226, 198, 255)
+	local DOT_DIM = Color3.fromRGB(112, 58, 214)
+	local DOT_HOT = Color3.fromRGB(240, 215, 255)
+
+	local state = {
+		fade = 0,
+		target = 1,
+		token = 0,
+		t0 = 0,
+		shownAt = 0,
+		hideRequested = false,
+		lastProg = 0,
+		frame = 0,
+		held = {},
+		onReveal = {},
+	}
+
+	-- Devolve (reativa) os paineis que ficaram escondidos durante o carregamento
+	local function release()
+		local cbs = state.onReveal
+		state.onReveal = {}
+		for _, fn in ipairs(cbs) do
+			task.spawn(function()
+				pcall(fn)
+			end)
+		end
+		for g, was in pairs(state.held) do
+			state.held[g] = nil
+			if g.Parent then
+				pcall(function()
+					g.Enabled = was
+				end)
+			end
+		end
+	end
+
+	local function destroy()
+		release()
+		if state.conn then
+			pcall(function()
+				state.conn:Disconnect()
+			end)
+			state.conn = nil
+		end
+		if state.gui then
+			pcall(function()
+				state.gui:Destroy()
+			end)
+			state.gui = nil
+		end
+		if state.blur then
+			pcall(function()
+				state.blur:Destroy()
+			end)
+			state.blur = nil
+		end
+	end
+	LOADER.Destroy = destroy
+
+	local function parentGui(gui)
+		pcall(function()
+			if syn and syn.protect_gui then
+				syn.protect_gui(gui)
+			end
+		end)
+		if type(gethui) == "function" then
+			local ok, hui = pcall(gethui)
+			if ok and typeof(hui) == "Instance" and pcall(function()
+				gui.Parent = hui
+			end) then
+				return
+			end
+		end
+		if pcall(function()
+			gui.Parent = game:GetService("CoreGui")
+		end) then
+			return
+		end
+		gui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+	end
+
+	local function round(obj)
+		local c = Instance.new("UICorner")
+		c.CornerRadius = UDim.new(1, 0)
+		c.Parent = obj
+		return c
+	end
+
+	local function corner(obj, radius)
+		local c = Instance.new("UICorner")
+		c.CornerRadius = UDim.new(0, radius)
+		c.Parent = obj
+		return c
+	end
+
+	local function build()
+		local gui = Instance.new("ScreenGui")
+		gui.Name = "LOCOPANILoading"
+		gui.IgnoreGuiInset = true
+		gui.ResetOnSpawn = false
+		gui.DisplayOrder = 2147483647
+		gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+		parentGui(gui)
+		state.gui = gui
+
+		-- Blur real no mundo 3D (atras da tela preta)
+		local okb, blur = pcall(function()
+			local b = Instance.new("BlurEffect")
+			b.Size = 0
+			b.Parent = game:GetService("Lighting")
+			return b
+		end)
+		if okb then
+			state.blur = blur
+		end
+
+		-- Fundo preto (com leve degrade roxo escuro embaixo)
+		local bg = Instance.new("Frame")
+		bg.Name = "Background"
+		bg.Size = UDim2.fromScale(1, 1)
+		bg.BackgroundColor3 = Color3.new(1, 1, 1)
+		bg.BorderSizePixel = 0
+		bg.Active = true
+		bg.ZIndex = 1
+		bg.Parent = gui
+		local grad = Instance.new("UIGradient")
+		grad.Color = ColorSequence.new(Color3.fromRGB(0, 0, 0), Color3.fromRGB(24, 8, 44))
+		grad.Rotation = 90
+		grad.Parent = bg
+
+		local function T(base)
+			return 1 - (1 - base) * state.fade
+		end
+
+		-- Particulas roxas tipo neve (ficam atras de tudo)
+		local stage = Instance.new("Frame")
+		stage.Name = "Stage"
+		stage.Size = UDim2.fromScale(1, 1)
+		stage.BackgroundTransparency = 1
+		stage.BorderSizePixel = 0
+		stage.ZIndex = 2
+		stage.Parent = gui
+
+		local sizes = { 2, 2, 3, 3, 3, 4, 4, 5, 6 }
+		local flakes = {}
+		for i = 1, FLAKES do
+			local sz = sizes[math.random(1, #sizes)]
+			local fr = Instance.new("Frame")
+			fr.AnchorPoint = Vector2.new(0.5, 0.5)
+			fr.Size = UDim2.fromOffset(sz, sz)
+			fr.BackgroundColor3 = Color3.fromRGB(math.random(175, 230), math.random(110, 190), 255)
+			fr.BorderSizePixel = 0
+			fr.ZIndex = 2
+			fr.Parent = stage
+			round(fr)
+			flakes[i] = {
+				frame = fr,
+				x = math.random(),
+				y = math.random(),
+				speed = 0.035 + sz * 0.012 + math.random() * 0.02,
+				amp = 0.008 + math.random() * 0.02,
+				freq = 0.6 + math.random() * 1.2,
+				phase = math.random() * 6.28,
+				wind = 0.006 + math.random() * 0.01,
+				base = 0.7 - sz * 0.07,
+			}
+		end
+
+		-- Centro da tela (tamanho 0): tudo abaixo fica posicionado a partir do centro
+		-- e escala sozinho em telas pequenas.
+		local holder = Instance.new("Frame")
+		holder.Name = "Center"
+		holder.AnchorPoint = Vector2.new(0.5, 0.5)
+		holder.Position = UDim2.fromScale(0.5, 0.5)
+		holder.Size = UDim2.fromOffset(0, 0)
+		holder.BackgroundTransparency = 1
+		holder.BorderSizePixel = 0
+		holder.ZIndex = 3
+		holder.Parent = gui
+		local fit = Instance.new("UIScale")
+		fit.Parent = holder
+		local function refit()
+			local vs = Vector2.new(1280, 720)
+			pcall(function()
+				vs = workspace.CurrentCamera.ViewportSize
+			end)
+			fit.Scale = math.clamp(math.min(vs.Y / 640, vs.X / 460), 0.5, 1)
+		end
+		refit()
+
+		-- Listas de itens que so precisam acompanhar o fade (atualizadas so quando o fade muda)
+		local fadeF, fadeS = {}, {}
+		local function regF(obj, base)
+			obj.BackgroundTransparency = 1
+			fadeF[#fadeF + 1] = { obj = obj, base = base }
+		end
+		local function regS(obj, base)
+			obj.Transparency = 1
+			fadeS[#fadeS + 1] = { obj = obj, base = base }
+		end
+
+		local function circle(parent, size, color, z)
+			local f = Instance.new("Frame")
+			f.AnchorPoint = Vector2.new(0.5, 0.5)
+			f.Size = UDim2.fromOffset(size, size)
+			f.BackgroundColor3 = color
+			f.BorderSizePixel = 0
+			f.ZIndex = z or 1
+			f.Parent = parent
+			round(f)
+			return f
+		end
+
+		local function stroke(parent, color, thickness)
+			local s = Instance.new("UIStroke")
+			s.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+			s.Color = color
+			s.Thickness = thickness
+			s.Parent = parent
+			return s
+		end
+
+		-- Glow roxo atras do logo (camadas concentricas que pulsam)
+		local glows = {}
+		for i = 1, 9 do
+			local g = circle(holder, LOGO + i * 24, PURPLE, 1)
+			g.Position = UDim2.fromOffset(0, CY)
+			glows[i] = { frame = g, size = LOGO + i * 24 }
+		end
+
+		-- ================= LOGO: "L" dentro de um circulo =================
+		local logo = Instance.new("Frame")
+		logo.Name = "Logo"
+		logo.AnchorPoint = Vector2.new(0.5, 0.5)
+		logo.Position = UDim2.fromOffset(0, CY)
+		logo.Size = UDim2.fromOffset(LOGO, LOGO)
+		logo.BackgroundTransparency = 1
+		logo.BorderSizePixel = 0
+		logo.ZIndex = 5
+		logo.Parent = holder
+		local logoScale = Instance.new("UIScale")
+		logoScale.Parent = logo
+
+		-- aro externo com degrade girando + glow
+		local ringFrame = circle(logo, LOGO, Color3.new(1, 1, 1), 1)
+		ringFrame.Position = UDim2.fromScale(0.5, 0.5)
+		ringFrame.BackgroundTransparency = 1 -- o aro e so contorno
+		local ringLine = stroke(ringFrame, Color3.new(1, 1, 1), 3)
+		regS(ringLine, 0)
+		local ringGlow = stroke(ringFrame, VIOLET, 10)
+		regS(ringGlow, 0.82)
+		local ringGrad = Instance.new("UIGradient")
+		ringGrad.Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, LAVENDER),
+			ColorSequenceKeypoint.new(0.35, PURPLE),
+			ColorSequenceKeypoint.new(0.65, Color3.fromRGB(86, 36, 170)),
+			ColorSequenceKeypoint.new(1, LAVENDER),
+		})
+		ringGrad.Parent = ringLine
+
+		-- disco escuro com degrade roxo
+		local disc = circle(logo, LOGO - 12, Color3.new(1, 1, 1), 2)
+		disc.Position = UDim2.fromScale(0.5, 0.5)
+		regF(disc, 0)
+		local discGrad = Instance.new("UIGradient")
+		discGrad.Color = ColorSequence.new(Color3.fromRGB(118, 54, 214), Color3.fromRGB(28, 11, 62))
+		discGrad.Rotation = 70
+		discGrad.Parent = disc
+		regS(stroke(disc, Color3.fromRGB(205, 160, 255), 1.5), 0.45)
+
+		-- aro fininho interno
+		local inner = circle(logo, LOGO - 36, Color3.new(1, 1, 1), 3)
+		inner.Position = UDim2.fromScale(0.5, 0.5)
+		inner.BackgroundTransparency = 1
+		regS(stroke(inner, Color3.fromRGB(190, 140, 255), 1), 0.72)
+
+		-- reflexo de vidro no topo
+		local sheen = Instance.new("Frame")
+		sheen.AnchorPoint = Vector2.new(0.5, 0)
+		sheen.Position = UDim2.new(0.5, 0, 0, 9)
+		sheen.Size = UDim2.fromOffset(LOGO * 0.66, LOGO * 0.34)
+		sheen.BackgroundColor3 = Color3.new(1, 1, 1)
+		sheen.BorderSizePixel = 0
+		sheen.ZIndex = 4
+		sheen.Parent = logo
+		round(sheen)
+		regF(sheen, 0)
+		local sheenGrad = Instance.new("UIGradient")
+		sheenGrad.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 0.8),
+			NumberSequenceKeypoint.new(1, 1),
+		})
+		sheenGrad.Rotation = 90
+		sheenGrad.Parent = sheen
+
+		-- brilho atras do L
+		local lcore = circle(logo, 74, VIOLET, 4)
+		lcore.Position = UDim2.fromScale(0.5, 0.5)
+		regF(lcore, 0.88)
+
+		-- L geometrico (duas barras arredondadas) + camadas de glow
+		local LX, LY, LT, LH, LW = 46, 34, 18, 55, 36
+		local function bar(x, y, w, h, color, base, radius, z)
+			local f = Instance.new("Frame")
+			f.Position = UDim2.fromOffset(x, y)
+			f.Size = UDim2.fromOffset(w, h)
+			f.BackgroundColor3 = color
+			f.BorderSizePixel = 0
+			f.ZIndex = z
+			f.Parent = logo
+			corner(f, radius)
+			regF(f, base)
+			return f
+		end
+		local function glowL(expand, color, base)
+			local r = expand + 5
+			bar(LX - expand, LY - expand, LT + expand * 2, LH + expand * 2, color, base, r, 5)
+			bar(LX - expand, LY + LH - LT - expand, LW + expand * 2, LT + expand * 2, color, base, r, 5)
+		end
+		glowL(13, PURPLE, 0.94)
+		glowL(9, VIOLET, 0.88)
+		glowL(5, VIOLET, 0.78)
+		glowL(2, LAVENDER, 0.55)
+		local lv = bar(LX, LY, LT, LH, Color3.new(1, 1, 1), 0, 5, 6)
+		local lvGrad = Instance.new("UIGradient")
+		lvGrad.Color = ColorSequence.new(Color3.new(1, 1, 1), LAVENDER)
+		lvGrad.Rotation = 90
+		lvGrad.Parent = lv
+		bar(LX, LY + LH - LT, LW, LT, LAVENDER, 0, 5, 6)
+
+		-- ================= BOLINHAS ao redor, pulsando uma por uma =================
+		local rings = {
+			{ n = 16, r = 90, dot = 7, off = 0 },
+			{ n = 24, r = 118, dot = 5, off = 0.5 / 24 },
+			{ n = 32, r = 146, dot = 4, off = 0 },
+		}
+		local dots = {}
+		for _, rg in ipairs(rings) do
+			for i = 1, rg.n do
+				local ang = -math.pi / 2 + (i - 1) / rg.n * math.pi * 2 -- comeca no topo, sentido horario
+				local f = circle(holder, rg.dot, DOT_DIM, 3)
+				f.Position = UDim2.fromOffset(math.cos(ang) * rg.r, CY + math.sin(ang) * rg.r)
+				local st = stroke(f, VIOLET, 1)
+				dots[#dots + 1] = {
+					frame = f,
+					stroke = st,
+					base = rg.dot,
+					shift = (i - 1) / rg.n + rg.off,
+				}
+			end
+		end
+
+		-- ================= Titulo =================
+		local TITLE_Y = CY + 190
+		local BAR_Y = CY + 232
+		local STATUS_Y = CY + 262
+
+		local title = Instance.new("TextLabel")
+		title.AnchorPoint = Vector2.new(0.5, 0.5)
+		title.Position = UDim2.fromOffset(0, TITLE_Y)
+		title.Size = UDim2.fromOffset(320, 36)
+		title.BackgroundTransparency = 1
+		title.Font = Enum.Font.GothamBold
+		title.Text = "LOCOPANI"
+		title.TextSize = 28
+		title.TextColor3 = Color3.fromRGB(236, 220, 255)
+		title.ZIndex = 10
+		title.Parent = holder
+		local titleStroke = stroke(title, Color3.fromRGB(150, 70, 255), 1.5)
+
+		-- ================= Barra de progresso retangular =================
+		local barGlow = Instance.new("Frame")
+		barGlow.AnchorPoint = Vector2.new(0.5, 0.5)
+		barGlow.Position = UDim2.fromOffset(0, BAR_Y)
+		barGlow.Size = UDim2.fromOffset(BAR_W + 24, 26)
+		barGlow.BackgroundColor3 = PURPLE
+		barGlow.BorderSizePixel = 0
+		barGlow.ZIndex = 1
+		barGlow.Parent = holder
+		corner(barGlow, 8)
+
+		local track = Instance.new("Frame")
+		track.Name = "ProgressBar"
+		track.AnchorPoint = Vector2.new(0.5, 0.5)
+		track.Position = UDim2.fromOffset(0, BAR_Y)
+		track.Size = UDim2.fromOffset(BAR_W, 10)
+		track.BackgroundColor3 = Color3.fromRGB(26, 11, 52)
+		track.BorderSizePixel = 0
+		track.ZIndex = 6
+		track.Parent = holder
+		corner(track, 3)
+		regF(track, 0)
+		regS(stroke(track, Color3.fromRGB(120, 68, 220), 1), 0.35)
+
+		local fill = Instance.new("Frame")
+		fill.Name = "Fill"
+		fill.Size = UDim2.new(0, 0, 1, 0)
+		fill.BackgroundColor3 = Color3.new(1, 1, 1)
+		fill.BorderSizePixel = 0
+		fill.ClipsDescendants = true
+		fill.ZIndex = 7
+		fill.Parent = track
+		corner(fill, 3)
+		regF(fill, 0)
+		local fillGrad = Instance.new("UIGradient")
+		fillGrad.Color = ColorSequence.new({
+			ColorSequenceKeypoint.new(0, Color3.fromRGB(110, 48, 228)),
+			ColorSequenceKeypoint.new(0.6, Color3.fromRGB(165, 92, 255)),
+			ColorSequenceKeypoint.new(1, Color3.fromRGB(228, 196, 255)),
+		})
+		fillGrad.Parent = fill
+
+		-- brilho que corre dentro do preenchimento
+		local shine = Instance.new("Frame")
+		shine.Size = UDim2.new(0, 46, 1, 0)
+		shine.BackgroundColor3 = Color3.new(1, 1, 1)
+		shine.BorderSizePixel = 0
+		shine.ZIndex = 8
+		shine.Parent = fill
+		regF(shine, 0)
+		local shineGrad = Instance.new("UIGradient")
+		shineGrad.Transparency = NumberSequence.new({
+			NumberSequenceKeypoint.new(0, 1),
+			NumberSequenceKeypoint.new(0.5, 0.55),
+			NumberSequenceKeypoint.new(1, 1),
+		})
+		shineGrad.Parent = shine
+
+		-- divisorias a cada 10%
+		for i = 1, 9 do
+			local mark = Instance.new("Frame")
+			mark.AnchorPoint = Vector2.new(0.5, 0)
+			mark.Position = UDim2.new(i / 10, 0, 0, 0)
+			mark.Size = UDim2.new(0, 1, 1, 0)
+			mark.BackgroundColor3 = Color3.fromRGB(10, 4, 22)
+			mark.BorderSizePixel = 0
+			mark.ZIndex = 9
+			mark.Parent = track
+			regF(mark, 0.55)
+		end
+
+		-- ponta brilhante na frente do preenchimento
+		local tip = Instance.new("Frame")
+		tip.AnchorPoint = Vector2.new(0.5, 0.5)
+		tip.Position = UDim2.new(0, 0, 0.5, 0)
+		tip.Size = UDim2.fromOffset(4, 18)
+		tip.BackgroundColor3 = Color3.new(1, 1, 1)
+		tip.BorderSizePixel = 0
+		tip.ZIndex = 10
+		tip.Parent = track
+		corner(tip, 2)
+		local tipStroke = stroke(tip, VIOLET, 3)
+
+		-- Porcentagem
+		local status = Instance.new("TextLabel")
+		status.AnchorPoint = Vector2.new(0.5, 0.5)
+		status.Position = UDim2.fromOffset(0, STATUS_Y)
+		status.Size = UDim2.fromOffset(320, 22)
+		status.BackgroundTransparency = 1
+		status.Font = Enum.Font.Gotham
+		status.Text = "Carregando... 0%"
+		status.TextSize = 16
+		status.TextColor3 = Color3.fromRGB(175, 135, 235)
+		status.ZIndex = 10
+		status.Parent = holder
+
+		-- Onde procurar o painel principal para esconde-lo durante o carregamento
+		local roots = {}
+		pcall(function()
+			if type(gethui) == "function" then
+				local h = gethui()
+				if typeof(h) == "Instance" then
+					roots[#roots + 1] = h
+				end
+			end
+		end)
+		pcall(function()
+			roots[#roots + 1] = game:GetService("CoreGui")
+		end)
+		pcall(function()
+			roots[#roots + 1] = game:GetService("Players").LocalPlayer.PlayerGui
+		end)
+
+		local lastPct = -1
+		local lastFade = -1
+
+		state.conn = RunService.RenderStepped:Connect(function(dt)
+			dt = math.min(dt, 0.1)
+			local now = os.clock() - state.t0
+			state.fade = state.fade + (state.target - state.fade) * math.min(1, dt * 6)
+			local f = state.fade
+			state.frame = state.frame + 1
+
+			if state.target == 0 and f < 0.02 then
+				destroy()
+				return
+			end
+			if state.target == 1 and os.clock() - state.shownAt > MAX_TIME then
+				LOADER.Hide(true)
+			end
+
+			-- Esconde o painel principal enquanto a tela de carregamento estiver ativa
+			if state.target == 1 then
+				for g in pairs(state.held) do
+					if g.Parent and g.Enabled then
+						g.Enabled = false -- impede o painel de reaparecer
+					end
+				end
+				if state.frame % 4 == 0 then
+					for _, r in ipairs(roots) do
+						pcall(function()
+							local g = r:FindFirstChild("LOCOPANIArgonUI")
+							if g then
+								LOADER.Hold(g)
+							end
+						end)
+					end
+				end
+			end
+
+			if state.frame % 30 == 0 then
+				refit()
+			end
+
+			-- Progresso 0..1 (chega em 100% em MIN_TIME segundos)
+			local prog
+			if state.target == 0 then
+				prog = state.lastProg
+			else
+				local p = math.min((os.clock() - state.shownAt) / (MIN_TIME - HOLD_100), 1)
+				local sm = p * p * (3 - 2 * p)
+				prog = p * 0.5 + sm * 0.5
+				if p >= 1 and not state.hideRequested then
+					prog = 0.99 -- espera o script terminar
+				end
+				state.lastProg = prog
+			end
+
+			bg.BackgroundTransparency = T(1 - BG_ALPHA)
+			if state.blur then
+				state.blur.Size = BLUR_SIZE * f
+			end
+
+			-- Itens estaticos: so atualiza quando o fade muda
+			if math.abs(f - lastFade) > 0.002 then
+				lastFade = f
+				for _, it in ipairs(fadeF) do
+					it.obj.BackgroundTransparency = T(it.base)
+				end
+				for _, it in ipairs(fadeS) do
+					it.obj.Transparency = T(it.base)
+				end
+				title.TextTransparency = 1 - f
+				titleStroke.Transparency = T(0.5)
+				status.TextTransparency = 1 - f
+			end
+
+			-- Glow pulsando
+			local pulse = 1 + 0.05 * math.sin(now * 2.2)
+			for _, g in ipairs(glows) do
+				local s = g.size * pulse
+				g.frame.Size = UDim2.fromOffset(s, s)
+				g.frame.BackgroundTransparency = T(0.93)
+			end
+
+			-- Logo: aro girando e leve "respiracao"
+			ringGrad.Rotation = (now * 80) % 360
+			logoScale.Scale = 1 + 0.025 * math.sin(now * 2.2)
+
+			-- Neve roxa
+			for _, fl in ipairs(flakes) do
+				fl.y = fl.y + fl.speed * dt
+				fl.x = fl.x + fl.wind * dt
+				if fl.y > 1.04 then
+					fl.y = -0.04
+					fl.x = math.random()
+				end
+				if fl.x > 1.04 then
+					fl.x = -0.04
+				end
+				fl.frame.Position = UDim2.fromScale(fl.x + math.sin(now * fl.freq + fl.phase) * fl.amp, fl.y)
+				fl.frame.BackgroundTransparency = T(fl.base + 0.1 * math.sin(now * 2 + fl.phase))
+			end
+
+			-- Bolinhas: cada uma pulsa uma vez por PULSE_PERIOD, uma depois da outra (sentido horario)
+			local t = now / PULSE_PERIOD
+			local parity = state.frame % 2
+			for idx, d in ipairs(dots) do
+				if idx % 2 == parity then
+					local ph = (t - d.shift) % 1
+					local k = math.min(1, ph / 0.06) * (1 - ph) ^ 3
+					k = math.min(1, k * 1.25)
+					local size = d.base * (1 + 0.9 * k)
+					d.frame.Size = UDim2.fromOffset(size, size)
+					d.frame.BackgroundColor3 = DOT_DIM:Lerp(DOT_HOT, k)
+					d.frame.BackgroundTransparency = T(0.6 - 0.6 * k)
+					d.stroke.Transparency = T(0.92 - 0.72 * k)
+					d.stroke.Thickness = 1 + 3 * k
+				end
+			end
+
+			-- Barra
+			local fillPx = BAR_W * prog
+			fill.Size = UDim2.new(prog, 0, 1, 0)
+			shine.Position = UDim2.fromOffset(((now * 0.9) % 1) * (fillPx + 70) - 50, 0)
+			tip.Position = UDim2.new(prog, 0, 0.5, 0)
+			tip.BackgroundTransparency = T(prog > 0.005 and 0.05 or 1)
+			tipStroke.Transparency = T(prog > 0.005 and 0.55 or 1)
+			barGlow.Size = UDim2.fromOffset((BAR_W + 24) * pulse, 26 * pulse)
+			barGlow.BackgroundTransparency = T(0.92 - 0.12 * prog)
+
+			local pct = math.floor(prog * 100 + 0.0001)
+			if pct ~= lastPct then
+				lastPct = pct
+				status.Text = "Carregando... " .. pct .. "%"
+			end
+		end)
+	end
+
+	function LOADER.Show()
+		state.token = state.token + 1
+		state.target = 1
+		state.hideRequested = false
+		state.shownAt = os.clock()
+		state.lastProg = 0
+		if state.gui then
+			return
+		end
+		state.fade = 0
+		state.t0 = os.clock()
+		local ok, err = pcall(build)
+		if not ok then
+			destroy()
+			warn("[LOCOPANI] tela de carregamento falhou: " .. tostring(err))
+		end
+	end
+
+	function LOADER.Hide(instant)
+		if not state.gui then
+			return
+		end
+		state.token = state.token + 1
+		state.hideRequested = true
+		local token = state.token
+		local wait_for = 0
+		if not instant then
+			local elapsed = os.clock() - state.shownAt
+			wait_for = (elapsed < MIN_TIME) and (MIN_TIME - elapsed) or HOLD_100
+		end
+		task.spawn(function()
+			if wait_for > 0 then
+				task.wait(wait_for)
+			end
+			if token == state.token then
+				if not instant then
+					state.lastProg = 1
+				end
+				state.target = 0
+				release() -- barra em 100%: mostra o painel
+			end
+		end)
+	end
+
+	-- Mantem um ScreenGui escondido ate a barra chegar a 100%
+	function LOADER.Hold(g)
+		if state.target ~= 1 or not state.gui then
+			return
+		end
+		if typeof(g) ~= "Instance" or not g:IsA("ScreenGui") then
+			return
+		end
+		if state.held[g] ~= nil then
+			return
+		end
+		state.held[g] = g.Enabled
+		pcall(function()
+			g.Enabled = false
+		end)
+		if DEBUG then
+			warn("[LOCOPANI] loader escondeu: " .. g.Name)
+		end
+	end
+
+	-- Executa fn quando a barra chegar a 100% (ou na hora, se a tela nao estiver ativa)
+	function LOADER.OnReveal(fn)
+		if state.gui and state.target == 1 then
+			state.onReveal[#state.onReveal + 1] = fn
+		else
+			task.spawn(function()
+				pcall(fn)
+			end)
+		end
+	end
+
+	pcall(LOADER.Show)
+end
+
+
 local LH_GEN = 1
 do
     if getgenv then
@@ -17212,6 +17941,376 @@ if not okWin or not Window then
     return
 end
 pcall(LocoFX.hookToggle, Library, Window)
+-- LOCOPANI: cursor realista (visual)
+-- ============================================================
+-- LOCOPANI Cursor Realista (V24)
+-- Seta de mouse desenhada por codigo: contorno escuro, preenchimento
+-- branco com leve degrade lavanda, sombra suave e efeito de clique.
+-- Nao usa nenhuma imagem/asset, entao nao quebra em nenhum executor.
+-- So aparece enquanto o painel principal esta aberto.
+-- ============================================================
+do
+	local env = (type(getgenv) == "function" and getgenv()) or _G
+
+	env.LOCOPANI_ApplyRealCursor = function(window)
+		if not window or not window.Main then
+			return
+		end
+
+		local UserInputService = game:GetService("UserInputService")
+		local RunService = game:GetService("RunService")
+		local TweenService = game:GetService("TweenService")
+		local GuiService = game:GetService("GuiService")
+
+		-- celular/tablet nao tem cursor
+		if not UserInputService.MouseEnabled then
+			return
+		end
+
+		if env.LOCOPANI_REAL_CURSOR and type(env.LOCOPANI_REAL_CURSOR.Destroy) == "function" then
+			pcall(env.LOCOPANI_REAL_CURSOR.Destroy)
+		end
+		local API = {}
+		env.LOCOPANI_REAL_CURSOR = API
+
+		-- ---------- ajustes ----------
+		local SCALE = 1.4 -- tamanho da seta (1.0 = pequena, 2.0 = grande)
+		local OUTLINE = Color3.fromRGB(18, 10, 32)
+		local RIPPLE = Color3.fromRGB(190, 130, 255)
+
+		-- ---------- desenho da seta ----------
+		local PAD_L, PAD_R = 3, 9
+		local SHADOW_X, SHADOW_Y = 1.6, 2.2
+		local Q = 10
+		local PTS = {
+			{ 0, 0 },
+			{ 0, 17 },
+			{ 4.2, 13.2 },
+			{ 7.4, 20.2 },
+			{ 10.3, 18.9 },
+			{ 7.1, 12.2 },
+			{ 12.4, 12.2 },
+		}
+		local poly = {}
+		for i, p in ipairs(PTS) do
+			poly[i] = { p[1] * SCALE, p[2] * SCALE }
+		end
+		local W = math.ceil(12.4 * SCALE) + PAD_L + PAD_R
+		local H = math.ceil(20.2 * SCALE) + PAD_L + PAD_R
+
+		local function segDist(px, py, ax, ay, bx, by)
+			local abx, aby = bx - ax, by - ay
+			local t = ((px - ax) * abx + (py - ay) * aby) / (abx * abx + aby * aby)
+			t = math.clamp(t, 0, 1)
+			local dx, dy = px - (ax + abx * t), py - (ay + aby * t)
+			return math.sqrt(dx * dx + dy * dy)
+		end
+
+		-- distancia com sinal ate a borda da seta (negativa = dentro)
+		local function sdf(px, py)
+			local dmin = math.huge
+			local inside = false
+			local n = #poly
+			local j = n
+			for i = 1, n do
+				local a, b = poly[j], poly[i]
+				local d = segDist(px, py, a[1], a[2], b[1], b[2])
+				if d < dmin then
+					dmin = d
+				end
+				if (a[2] > py) ~= (b[2] > py) and px < (a[1] - b[1]) * (py - b[2]) / (a[2] - b[2]) + b[1] then
+					inside = not inside
+				end
+				j = i
+			end
+			if inside then
+				return -dmin
+			end
+			return dmin
+		end
+
+		-- junta pixels vizinhos de mesmo valor em um unico Frame
+		local function eachRun(vals, n, fn)
+			local i = 1
+			while i <= n do
+				local v = vals[i]
+				if v == 0 then
+					i = i + 1
+				else
+					local j = i
+					while j < n and vals[j + 1] == v do
+						j = j + 1
+					end
+					fn(i, j, v)
+					i = j + 1
+				end
+			end
+		end
+
+		local function addFrame(parent, x, y, w, h, color, alpha, z)
+			local f = Instance.new("Frame")
+			f.BorderSizePixel = 0
+			f.Active = false
+			f.BackgroundColor3 = color
+			f.BackgroundTransparency = 1 - alpha
+			f.Position = UDim2.fromOffset(x - PAD_L, y - PAD_L)
+			f.Size = UDim2.fromOffset(w, h)
+			f.ZIndex = z
+			f.Parent = parent
+		end
+
+		local function buildArrow(parent)
+			-- sombra suave (grade 2x2 para gastar poucos Frames)
+			local cols = math.ceil(W / 2)
+			for gy = 0, H - 1, 2 do
+				local row = {}
+				for c = 1, cols do
+					local gx = (c - 1) * 2
+					local wx, wy = gx + 1 - PAD_L, gy + 1 - PAD_L
+					if sdf(wx, wy) < -1.5 then
+						row[c] = 0
+					else
+						local sd = sdf(wx - SHADOW_X, wy - SHADOW_Y)
+						local a = 0.5 * math.clamp(1 - (sd - 0.2) / 2.8, 0, 1) ^ 1.6
+						row[c] = math.floor(a / 0.5 * 8 + 0.5)
+					end
+				end
+				eachRun(row, cols, function(i, j, q)
+					addFrame(parent, (i - 1) * 2, gy, (j - i + 1) * 2, math.min(2, H - gy), Color3.new(0, 0, 0), q / 8 * 0.5, 1)
+				end)
+			end
+
+			-- contorno + preenchimento com borda suavizada (anti-serrilhado)
+			for gy = 0, H - 1 do
+				local wy = gy + 0.5 - PAD_L
+				local bl, wh = {}, {}
+				for gx = 0, W - 1 do
+					local d = sdf(gx + 0.5 - PAD_L, wy)
+					local cw = math.floor(math.clamp(-0.15 - d, 0, 1) * Q + 0.5)
+					local cb = math.floor(math.clamp(1.15 - d, 0, 1) * Q + 0.5)
+					if cw == Q then
+						cb = 0
+					end
+					bl[gx + 1] = cb
+					wh[gx + 1] = cw
+				end
+				local t = gy / H
+				local fillColor = Color3.fromRGB(
+					math.floor(255 - 29 * t),
+					math.floor(255 - 43 * t),
+					math.floor(255 - 5 * t)
+				)
+				eachRun(bl, W, function(i, j, q)
+					addFrame(parent, i - 1, gy, j - i + 1, 1, OUTLINE, q / Q, 2)
+				end)
+				eachRun(wh, W, function(i, j, q)
+					addFrame(parent, i - 1, gy, j - i + 1, 1, fillColor, q / Q, 3)
+				end)
+			end
+		end
+
+		-- ---------- ScreenGui do cursor ----------
+		local gui = Instance.new("ScreenGui")
+		gui.Name = "LOCOPANICursor"
+		gui.IgnoreGuiInset = true
+		gui.ResetOnSpawn = false
+		gui.DisplayOrder = 2147483647
+		gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+		pcall(function()
+			if syn and syn.protect_gui then
+				syn.protect_gui(gui)
+			end
+		end)
+		local parented = false
+		if type(gethui) == "function" then
+			local ok, hui = pcall(gethui)
+			if ok and typeof(hui) == "Instance" and pcall(function()
+				gui.Parent = hui
+			end) then
+				parented = true
+			end
+		end
+		if not parented and not pcall(function()
+			gui.Parent = game:GetService("CoreGui")
+		end) then
+			gui.Parent = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui")
+		end
+
+		-- origem do cursor = ponta da seta (onde o mouse realmente clica)
+		local cursor = Instance.new("Frame")
+		cursor.Name = "Cursor"
+		cursor.BackgroundTransparency = 1
+		cursor.BorderSizePixel = 0
+		cursor.Size = UDim2.fromOffset(0, 0)
+		cursor.Active = false
+		cursor.Visible = false
+		cursor.ZIndex = 5
+		cursor.Parent = gui
+		local press = Instance.new("UIScale")
+		press.Scale = 1
+		press.Parent = cursor
+		buildArrow(cursor)
+
+		-- ---------- efeito de clique ----------
+		local function ripple()
+			local mp = UserInputService:GetMouseLocation()
+			local r = Instance.new("Frame")
+			r.AnchorPoint = Vector2.new(0.5, 0.5)
+			r.Position = UDim2.fromOffset(mp.X, mp.Y)
+			r.Size = UDim2.fromOffset(6, 6)
+			r.BackgroundTransparency = 1
+			r.BorderSizePixel = 0
+			r.ZIndex = 1
+			r.Parent = gui
+			local rc = Instance.new("UICorner")
+			rc.CornerRadius = UDim.new(1, 0)
+			rc.Parent = r
+			local st = Instance.new("UIStroke")
+			st.Color = RIPPLE
+			st.Thickness = 2
+			st.Transparency = 0.15
+			st.Parent = r
+			local info = TweenInfo.new(0.42, Enum.EasingStyle.Quad, Enum.EasingDirection.Out)
+			TweenService:Create(r, info, { Size = UDim2.fromOffset(46, 46) }):Play()
+			TweenService:Create(st, info, { Transparency = 1, Thickness = 0.5 }):Play()
+			task.delay(0.45, function()
+				if r.Parent then
+					r:Destroy()
+				end
+			end)
+		end
+
+		local connections = {}
+		connections[#connections + 1] = UserInputService.InputBegan:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 and cursor.Visible then
+				TweenService:Create(press, TweenInfo.new(0.07, Enum.EasingStyle.Quad), { Scale = 0.9 }):Play()
+				ripple()
+			end
+		end)
+		connections[#connections + 1] = UserInputService.InputEnded:Connect(function(input)
+			if input.UserInputType == Enum.UserInputType.MouseButton1 then
+				TweenService:Create(press, TweenInfo.new(0.09, Enum.EasingStyle.Quad), { Scale = 1 }):Play()
+			end
+		end)
+
+		-- ---------- liga/desliga junto com o painel ----------
+		local hidingSystem = false
+
+		local function silenceOriginal()
+			local cg = window.CursorGui
+			if typeof(cg) ~= "Instance" then
+				return
+			end
+			if cg:IsA("ScreenGui") then
+				if cg.Enabled then
+					cg.Enabled = false
+				end
+			elseif cg:IsA("GuiObject") then
+				if cg.Visible then
+					cg.Visible = false
+				end
+			end
+		end
+
+		local function restoreSystem()
+			if hidingSystem then
+				hidingSystem = false
+				pcall(function()
+					UserInputService.MouseIconEnabled = true
+				end)
+			end
+		end
+
+		function API.Destroy()
+			for _, c in ipairs(connections) do
+				pcall(function()
+					c:Disconnect()
+				end)
+			end
+			connections = {}
+			if API.loop then
+				pcall(function()
+					API.loop:Disconnect()
+				end)
+				API.loop = nil
+			end
+			restoreSystem()
+			pcall(function()
+				gui:Destroy()
+			end)
+		end
+
+		API.loop = RunService.RenderStepped:Connect(function()
+			local main = window.Main
+			if typeof(main) ~= "Instance" or main.Parent == nil then
+				API.Destroy()
+				return
+			end
+			local sg = window.ScreenGui
+			local show = main.Visible and (typeof(sg) ~= "Instance" or sg.Enabled)
+			if show then
+				-- com o mouse travado no centro (shift lock) nao desenha o cursor
+				if UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter then
+					show = false
+				end
+				if GuiService.MenuIsOpen then
+					show = false
+				end
+			end
+
+			if show then
+				local mp = UserInputService:GetMouseLocation()
+				cursor.Position = UDim2.fromOffset(mp.X, mp.Y)
+				if not cursor.Visible then
+					cursor.Visible = true
+				end
+				if UserInputService.MouseIconEnabled then
+					UserInputService.MouseIconEnabled = false
+				end
+				hidingSystem = true
+				silenceOriginal()
+			else
+				if cursor.Visible then
+					cursor.Visible = false
+				end
+				restoreSystem()
+			end
+		end)
+	end
+end
+
+-- ============================================================
+-- COMO LIGAR (adicione esta linha logo depois de
+--   pcall(function() LOCOPANI_ApplyInteractivePolish(rawWindow) end)
+-- na parte onde o painel principal e criado):
+--
+-- pcall(function() local e = (type(getgenv) == "function" and getgenv()) or _G e.LOCOPANI_ApplyRealCursor(rawWindow) end)
+-- ============================================================
+
+
+-- Integração do cursor ao painel Linoria existente.
+pcall(function()
+    local env = (type(getgenv) == "function" and getgenv()) or _G
+    local main = Library.Window or Window.Main
+    if typeof(main) == "Instance" and main:IsA("GuiObject") then
+        env.LOCOPANI_ApplyRealCursor({
+            Main = main,
+            ScreenGui = Library.ScreenGui,
+            CursorGui = Window.CursorGui or Library.CursorGui,
+        })
+    else
+        warn("[LOCOPANI] Cursor: painel principal ainda não encontrado")
+    end
+end)
+
+-- Mantém a interface oculta até a tela de carregamento concluir.
+pcall(function()
+    local env = (type(getgenv) == "function" and getgenv()) or _G
+    if env.LOCOPANI_LOADER and typeof(Library.ScreenGui) == "Instance" then
+        env.LOCOPANI_LOADER.Hold(Library.ScreenGui)
+    end
+end)
+
 local Tabs = {
     Combat    = Window:AddTab('Combat'),
     Rage      = Window:AddTab('Rage'),
@@ -18308,6 +19407,11 @@ task.spawn(function()
         end)
         task.wait(0.5)
     end
+end)
+-- Conclui a tela de carregamento; ela respeita a duração mínima de 6s.
+pcall(function()
+    local env = (type(getgenv) == "function" and getgenv()) or _G
+    if env.LOCOPANI_LOADER then env.LOCOPANI_LOADER.Hide(false) end
 end)
 Library:Notify('Locopani Hub v1 beta loaded', 4)
 _G["\76\72"] = Library
